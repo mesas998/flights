@@ -1,0 +1,6 @@
+pip install django
+pip install hdx-python-api
+pip install pandas
+pip install multipledispatch
+pip install django-extensions
+

@@ -1,0 +1,324 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <!--a name="viewport" content="width=device-width, initial-scale=1.0"-->
+    <title>Magula Flight Tracker | Reactive</title>
+    <!-- meta http-equiv="refresh" content="20!-- " -->
+    <!-- next three never cache -->
+    <meta http-equiv="cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="pragma" content="no-cache" />
+    <meta http-equiv="expires" content="0" />
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ google_api_key }}&callback=initMap" defer ></script>
+    <!-- src="{% static "images/plane_icon_north.png" %}" alt="Hi!"-->
+</head>
+<body>
+  <div id="map" style="height: 100vh; width: 100%;"></div>
+  <div id="solid-root"></div>
+  <script type="module">
+    import { render } from 'https://cdn.skypack.dev/solid-js/web';
+    import { createSignal, onMount, onCleanup, For } from 'https://cdn.skypack.dev/solid-js';
+    import html from 'https://cdn.skypack.dev/solid-js/html';
+
+    // --- HELPERS ---
+function styleButton(btn, label, tip, isActive = false) {
+    if (isActive) {
+        btn.style.backgroundColor = "#1a73e8"; // Active blue
+        btn.style.color = "#ffffff";
+        btn.style.border = "2px solid #0d47a1";
+        btn.style.fontWeight = "bold";
+    } else {
+        btn.style.backgroundColor = "#fff";
+        btn.style.color = "#333333";
+        btn.style.border = "2px solid #ccc";
+        btn.style.fontWeight = "normal";
+    }
+    btn.style.borderRadius = "3px";
+    btn.style.boxShadow = "0 2px 6px rgba(0,0,0,.3)";
+    btn.style.cursor = "pointer";
+    btn.style.margin = "5px";
+    btn.style.padding = "5px 10px";
+    btn.title = tip;
+    btn.innerHTML = label;
+}
+
+function redirectAll(map, label, tip, path, isActive = false) {
+    const btn = document.createElement("button");
+    styleButton(btn, label, tip, isActive);
+    btn.addEventListener("click", () => {
+        window.location.href = path;
+    });
+    return btn;
+}
+    // ... (Keep your FlightMarker and getPredictedPos logic here) ...
+    // --- YOUR PREDICTION MATH ---
+    function getPredictedPos(lat, lon, track, velMph, elapsedSec) {
+        const DEG_TO_METERS = 111320;
+        const KNOTS_TO_MPH = 1.150779
+        const velocityMps = (velMph * 1609.34 * KNOTS_TO_MPH) / 3600;
+        const dist = velocityMps * elapsedSec;
+        const trackRad = track * Math.PI / 180;
+        return {
+            lat: lat + (dist * Math.cos(trackRad)) / DEG_TO_METERS,
+            lng: lon + (dist * Math.sin(trackRad)) / (DEG_TO_METERS * Math.cos(lat * Math.PI / 180))
+        };
+    }
+
+    // --- THE FLIGHT COMPONENT ---
+    function FlightMarker(props) {
+        const f = props.data;
+        var label2 = 'Flight: '+f.flightno+' orig:'+f.orig+' dest:'+f.dest+
+          ' ('+f.lat.toFixed(4)+', '+f.lng.toFixed(4)+') track:'+f.track+' velocity:'+f.vel+
+          ' altitude:'+f.alt+' squawk:'+f.squawk+' ETA:'+f.eta+' callsign:'+f.callsign;
+        onMount(() => {
+            const marker = new google.maps.Marker({
+                position: { lat: f.lat, lng: f.lng, },
+                map: window.map,
+                label: { text: label2 },
+                icon: {
+                    // This 'path' is a standard aircraft shape in SVG format
+                    path: "M21,16L21,14L13,9L13,3.5A1.5,1.5 0 0,0 11.5,2A1.5,1.5 0 0,0 10,3.5L10,9L2,14L2,16L10,13.5L10,19L8,20.5L8,22L11.5,21L15,22L15,20.5L13,19L13,13.5L21,16Z",
+                    fillColor: "#4285F4", // Google Blue (you can use 'red' or hex codes)
+                    fillOpacity: 1,
+                    anchor: new google.maps.Point(11, 11), // Centers the icon
+                    strokeWeight: 1,
+                    strokeColor: "#ffffff", // White outline to make it pop
+                    scale: 1.5,             // Adjust size here
+                    rotation: f.track      // <--- THIS NOW WORKS PERFECTLY!
+                }
+            });
+            const trail = new google.maps.Polyline({
+                path: [{ lat: f.lat, lng: f.lng }], // Start at initial position
+                geodesic: true,
+                strokeColor: "#FF0000",
+                strokeOpacity: 0.5,
+                strokeWeight: 2,
+                map: window.map
+            });
+            marker.addListener("click", () => {
+                window.open(`https://www.flightaware.com/live/flight/${f.callsign}`, '_blank');
+            });
+            let secondsElapsed = 0;
+            const timer = setInterval(() => {
+                secondsElapsed += 1;
+                const nextPos = getPredictedPos(f.lat, f.lng, f.track, f.vel, secondsElapsed);
+                //nsole.log('04r callsign: '+f.callsign+' lat:'+f.lat+' lng: '+f.lng)
+                marker.setPosition(nextPos);
+                marker.setLabel( 'Flight No.:'+f.flightno+'  orig:'+f.orig+'  dest:'+f.dest+'  ETA: '+f.eta+
+                  '  ('+nextPos.lat.toFixed(4)+' ,'+nextPos.lng.toFixed(4)+')  altitude:'+f.alt+
+                  '  velocity:'+f.vel+'  squawk:'+f.squawk+'  track:'+f.track+' callsign:'+f.callsign);
+                const path = trail.getPath();
+                path.push(new google.maps.LatLng(nextPos.lat, nextPos.lng));
+                if (path.getLength() > 20) {
+                    path.removeAt(0);
+                }
+            }, 1000);
+            onCleanup(() => {
+                clearInterval(timer);
+                marker.setMap(null);
+                trail.setMap(null);
+            });
+        });
+        return null;
+    }
+
+
+    function App(props) {
+         // if they accidentally click a button or a link, they can "zip" back to map-control mode instantly
+        window.addEventListener('keydown', (e) => { // suggested by gemini AI
+            if (e.key === 'Escape') {
+                document.getElementById('map').focus();
+            }
+        });
+
+
+        return html`
+            <${For} each=${props.flights}>
+                ${(flight) => html`<${FlightMarker} data=${flight} />`}
+            <//>
+
+        `;
+    }
+
+// --- GLOBAL INIT ---
+    window.initMap = () => {
+        console.log("Starting initMap...");
+
+        const flightsData = [
+            {% for f in django_flights %}
+            {
+                flightno: "{{ f.flightno }}",
+                callsign: "{{ f.callsign }}",
+                flight: "{{ f.flight }}",
+                squawk: "{{ f.squawk }}",
+                alt: "{{ f.geo_altitude }}",
+                eta: "{{ f.eta }}",
+                orig: "{{ f.orig_iata }}",
+                dest: "{{ f.dest_iata }}",
+                lat: {{ f.latitude|default:"null" }},
+                lng: {{ f.longitude|default:"null" }},
+                track: {{ f.true_track|default:0 }},
+                vel: {{ f.velocity|default:0 }}
+            }{% if not forloop.last %},{% endif %}
+            {% endfor %}
+        ].filter(f => f.lat !== null && f.lng !== null && f.lat !== 0 && f.lng !== 0);
+
+        console.log("Valid flights data loaded:", flightsData.length);
+
+        // 1. If arriving from a button filter submission (?count=...), clear previous view
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('count')) {
+            window.localStorage.removeItem("flight_map_viewport");
+            // Strip ?count= from the URL and internal navigation state
+            //ndow.history.replaceState({}, document.title, window.location.pathname);
+        }
+        // Schedule the auto-refresh programmatically so it reloads clean without ?count=
+        setTimeout(() => {
+            window.location.href = window.location.pathname;
+        }, 10000); // 60 seconds (or 10000 for 10 seconds)
+
+        // 2. Check for a previously saved viewport across 60-second reloads
+        const savedViewportStr = window.localStorage.getItem("flight_map_viewport");
+        const savedViewport = savedViewportStr ? JSON.parse(savedViewportStr) : null;
+        console.log('00f savedViewport:',savedViewport);
+
+        const defaultCenter = {
+            lat: {{ extent.latitude|default:0.0 }},
+            lng: {{ extent.longitude|default:0.0 }}
+        };
+        const defaultZoom = {{ zoom|default:0 }};
+
+        // 3. Initialize map using the saved view if present, else fallback defaults
+        window.map = new google.maps.Map(document.getElementById('map'), {
+            center: savedViewport ? savedViewport.center : defaultCenter,
+            zoom: savedViewport ? savedViewport.zoom : defaultZoom,
+        });
+
+        // 4. Render Solid components
+        render(() => html`<${App} flights=${flightsData} />`, document.getElementById('solid-root'));
+
+        // 5. If there is NO saved view, frame all active planes immediately
+        if (!savedViewport) {
+            console.log('00k !savedViewport');
+            if (flightsData.length > 1) {
+                console.log('00m flightsData.length > 1');
+                const bounds = new google.maps.LatLngBounds();
+                console.log('01d bounds changing:',bounds);
+                flightsData.forEach(f => bounds.extend({ lat: f.lat, lng: f.lng }));
+                window.map.fitBounds(bounds, { top: 50, bottom: 50, left: 50, right: 50 });
+            } else if (flightsData.length === 1) {
+                console.log('00p else');
+                window.map.setCenter({ lat: flightsData[0].lat, lng: flightsData[0].lng });
+                window.map.setZoom(12);
+            }
+        }
+
+        // 6. Remember the zoom and center whenever the user pans or zooms
+        window.map.addListener('idle', () => {
+            const center = window.map.getCenter();
+            const zoom = window.map.getZoom();
+
+            if (center && zoom !== undefined) {
+                window.localStorage.setItem("flight_map_viewport", JSON.stringify({
+                    center: { lat: center.lat(), lng: center.lng() },
+                    zoom: zoom
+                }));
+            }
+        });
+
+        //
+        // Create the buttons container
+        const controlDiv = document.createElement("div");
+        controlDiv.style.display = "flex";
+        controlDiv.style.flexWrap = "wrap";
+        controlDiv.style.justifyContent = "center";
+
+        // Read the active criterion passed from Django
+        const activeCriterion = "{{ active_criterion|default:'' }}";
+
+        const buttonConfigs = [
+            { key: 'category',     label: 'Category',     path: './update_category' },
+            { key: 'airport',      label: 'Airport',      path: './update_airport' },
+            { key: 'bounds',       label: 'Bounds',       path: './update_bounds' },
+            { key: 'fno',          label: 'Flight No.',   path: './update_fno' },
+            { key: 'airspace',     label: 'Airspace',     path: './update_airspace' },
+            { key: 'operating_as', label: 'Operating As', path: './update_operating_as' },
+            { key: 'aircraft',     label: 'Aircraft',     path: './update_aircraft' },
+            { key: 'route',        label: 'Route',        path: './update_route' },
+            { key: 'altitude',     label: 'Altitude',     path: './update_altitude' }
+        ];
+
+        buttonConfigs.forEach(cfg => {
+            const isActive = (cfg.key === activeCriterion);
+            const btn = redirectAll(window.map, cfg.label, 'Click to filter', cfg.path, isActive);
+            controlDiv.appendChild(btn);
+        });
+        //ndow.map.controls[google.maps.ControlPosition.TOP_CENTER].push(controlDiv);
+        window.map.controls[google.maps.ControlPosition.TOP_CENTER].push(controlDiv);
+
+        // --- EMPTY STATE NOTIFICATION ---
+        if (flightsData.length === 0) {
+            const emptyBanner = document.createElement("div");
+            emptyBanner.style.backgroundColor = "rgba(255, 255, 255, 0.95)";
+            emptyBanner.style.border = "1px solid #d93025";
+            emptyBanner.style.borderLeft = "5px solid #d93025"; // Red alert accent
+            emptyBanner.style.borderRadius = "4px";
+            emptyBanner.style.boxShadow = "0 3px 10px rgba(0,0,0,0.25)";
+            emptyBanner.style.margin = "12px auto";
+            emptyBanner.style.padding = "10px 18px";
+            emptyBanner.style.fontSize = "13px";
+            emptyBanner.style.color = "#202124";
+            emptyBanner.style.display = "flex";
+            emptyBanner.style.alignItems = "center";
+            emptyBanner.style.gap = "8px";
+            emptyBanner.style.zIndex = "1000";
+
+            const filterName = activeCriterion ? ` for <b>${activeCriterion}</b>` : "";
+            emptyBanner.innerHTML = `
+                <span style="font-size: 16px;">✈️</span>
+                <span><b>No airborne flights found</b>${filterName}. The live feed returned 0 aircraft matching these criteria right now.</span>
+            `;
+
+            // Position it right below the filter buttons
+            window.map.controls[google.maps.ControlPosition.TOP_CENTER].push(emptyBanner);
+        }
+        //
+
+        // Ensure keyboard control (+, -, arrow keys) is active immediately on load
+        google.maps.event.addListenerOnce(window.map, 'idle', () => {
+            const mapContainer = document.getElementById('map');
+            // Look for the inner div Google Maps assigns tabindex="0" to for keyboard control
+            const innerFocusable = mapContainer.querySelector('div[tabindex="0"]') || mapContainer;
+            if (innerFocusable) {
+                innerFocusable.focus({ preventScroll: true });
+            }
+        });
+        // Add a subtle keyboard shortcut hint in initMap
+        const keyHint = document.createElement("div");
+        keyHint.style.backgroundColor = "rgba(255, 255, 255, 0.85)";
+        keyHint.style.backdropFilter = "blur(4px)";
+        keyHint.style.border = "1px solid #ccc";
+        keyHint.style.borderRadius = "4px";
+        keyHint.style.padding = "3px 8px";
+        keyHint.style.margin = "10px";
+        keyHint.style.fontSize = "12px";
+        keyHint.style.color = "#444";
+        keyHint.style.boxShadow = "0 1px 4px rgba(0,0,0,0.2)";
+        keyHint.innerHTML = "⌨️ Use <b>+/-</b> to zoom &bull; <b>Arrows</b> to pan &bull; <b>Esc</b> to focus";
+
+        window.map.controls[google.maps.ControlPosition.BOTTOM_CENTER].push(keyHint);
+    };
+
+
+
+
+    if (window.google && window.google.maps) window.initMap();
+  </script>
+      <table>
+    "{{ google_maps_api_key }}"
+    {{ django_flights }}
+    </table>
+</body>
+</html>
